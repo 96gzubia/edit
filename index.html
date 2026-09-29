@@ -19,7 +19,7 @@
 <header class="app-header">
  <a class="wordmark" href="#" aria-label="Lecture Studio home"><span class="mark">E</span><span>Edit<span class="wordmark-sub">Lecture Studio</span></span></a>
  <span id="save-state" class="save-state" role="status">Local workspace</span>
- <div class="top-actions"><button id="help-button" class="icon-button" aria-label="Help">?</button><button id="import-button">Import HTML</button><button id="save-button">Save workspace</button><button id="export-button" class="primary">Export lecture <span aria-hidden="true">↗</span></button></div>
+ <div class="top-actions"><button id="help-button" class="icon-button" aria-label="Help">?</button><button id="import-button">Import HTML</button><button id="save-button">Save workspace</button><a href="https://github.com/96gzubia/project-engineering-interactive/blob/main/PUBLISHING.md" target="_blank" rel="noopener">Publishing guide</a><button id="handoff-button">Prepare publishing handoff</button><button id="export-button" class="primary">Export lecture <span aria-hidden="true">↗</span></button></div>
 </header>
 <input id="file-input" type="file" accept=".html,.htm,.json" multiple hidden>
 <main id="app">
@@ -284,7 +284,7 @@ function repairSelections(){
 function options(selected,worksOnly=false){const original=state.projects.filter(p=>p.role==='original'),works=state.projects.filter(p=>p.role==='work');const group=(name,ps)=>`<optgroup label="${name}">${ps.map(p=>`<option value="${p.id}" ${p.id===selected?'selected':''}>${E(p.name)}</option>`).join('')}</optgroup>`;return (!worksOnly?group('Imported originals',original):'')+group('Working projects',works)}
 function render(){
  repairSelections();const exists=state.projects.length>0;$('welcome').hidden=exists;$('studio').hidden=!exists;
- $('export-button').disabled=!dst()?.entries.length;$('save-button').disabled=!exists;$('preview-button').disabled=!dst()?.entries.length;
+ $('handoff-button').disabled=!dst()?.entries.length;$('export-button').disabled=!dst()?.entries.length;$('save-button').disabled=!exists;$('preview-button').disabled=!dst()?.entries.length;
  if(!exists){lastPreview=null;$('canvas').srcdoc='';return}
  $('source-project').innerHTML=options(sourceId);$('target-project').innerHTML=options(targetId,true);
  $('source-count').textContent=count(src());$('target-count').textContent=count(dst());
@@ -361,6 +361,29 @@ function renderModule(e,readOnly){const p=e.payload,q=p.question||{prompt:'',opt
 }
 window.addEventListener('message',e=>{if(e.source!==$('canvas').contentWindow||e.data?.studio!==activeToken)return;if(e.data.type==='ready'&&Array.isArray(e.data.lines)){lines=e.data.lines;if(pendingLineText){chosenLine=lines.find(l=>l.text===pendingLineText)||null;pendingLineText=''}if(view==='text'&&active()?.kind==='scene')renderPanel()}else if(e.data.type==='line'){if(!discardPending()){$('canvas').contentWindow.postMessage({studio:activeToken,type:'highlight',id:chosenLine?.id||''},'*');return}chosenLine=lines.find(l=>l.id===e.data.line?.id)||null;view='text';renderActive()}});
 function addText(){const e=active();if(!e||e.kind!=='scene'||!editable())return;const p=e.payload,line={kind:'new',text:'',x:p.width*.08,baseline:p.height*.5,size:p.width*.035,width:p.width*.6};pendingLineText='New text';updateEntry(Studio.editLine(e,line,{text:'New text',x:line.x,y:line.baseline,size:line.size,width:line.width,color:'#14344e'}),'Add text')}
+async function prepareHandoff(){
+ try{
+  if(formDirty)throw Error('Apply your text changes first.');
+  if(!dst()?.entries.length)throw Error('Select a working lecture first.');
+  const id=prompt('Stable lecture ID (for example pm-mii-02). Reuse an existing ID only to revise that lecture.','pm-mii-02');
+  if(id===null)return;
+  if(!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id)||id.length>80)throw Error('Use a lowercase lecture ID with hyphens, at most 80 characters.');
+  const raw=prompt('Lecture number:','2');if(raw===null)return;
+  const number=Number(raw);if(!Number.isInteger(number)||number<1||number>9999)throw Error('Enter a lecture number from 1 to 9999.');
+  const title=prompt('Student-facing lecture title:',dst().name);if(title===null)return;
+  const course=prompt('Course:','Project Management · M.Sc. Industrial Engineering · EHU');if(course===null)return;
+  if(!title.trim()||!course.trim()||title.length>300||course.length>300)throw Error('Title and course are required (maximum 300 characters each).');
+  const result=Studio.exportHTML(dst(),state.origins);
+  if(result.warnings.length&&!confirm(result.warnings.join('\n')+'\n\nPrepare this handoff for validation?'))return;
+  Studio.parseHTML(result.html,'handoff.html');
+  const hash=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(result.html));
+  const sha256=Array.from(new Uint8Array(hash),b=>b.toString(16).padStart(2,'0')).join('');
+  if(!confirm('Prepare '+id+' · '+title.trim()+'?\nNew filename: lectures/'+id+'.html (existing IDs retain their published URL).\nNothing is published and latest is unchanged.'))return;
+  download(id+'.lecture-publish.json',JSON.stringify({format:'lecture-studio-publish',version:1,lecture:{id,number,title:title.trim(),course:course.trim()},sha256,html:result.html},null,2),'application/json');
+  notify('Handoff prepared. Run scripts/publish-lecture.py in project-engineering-interactive to validate; use --publish explicitly to commit. See Publishing guide.');
+ }catch(e){fail(e)}
+}
+$('handoff-button').onclick=prepareHandoff;
 function exportReview(){if(!dst())return;$('runtime-select').innerHTML=Object.values(state.origins).map(o=>`<option value="${o.id}" ${o.id===dst().runtime?'selected':''}>${E(o.name)}${o.compatible?'':' · unrecognized runtime'}</option>`).join('');$('export-confirm').checked=false;updateExportReview();$('export-dialog').showModal()}
 function updateExportReview(){try{const a=Studio.assemble(dst(),state.origins,val('runtime-select'));$('export-summary').textContent=`${a.scenes.length} slides · ${a.modules.length} interactions · ${a.seq.length} screens in edited order`;$('export-warnings').innerHTML=a.warnings.length?a.warnings.map(w=>`<p>${E(w)}</p>`).join(''):'Unique navigation IDs and original SVG figures are preserved. Test motion, media, and interactive screens before publishing.';$('export-warnings').classList.remove('error');$('download-lecture').disabled=!$('export-confirm').checked}catch(e){$('export-summary').textContent='Export needs attention';$('export-warnings').textContent=e.message;$('export-warnings').classList.add('error');$('download-lecture').disabled=true}}
 function exportLecture(){try{const runtime=val('runtime-select'),result=Studio.exportHTML(dst(),state.origins,runtime);download(slug(dst().name)+'.html',result.html,'text/html');if(dst().runtime!==runtime){const p=dst();change('Select export runtime',s=>replaceProject(s,{...p,runtime}));render()}$('export-dialog').close();notify('Lecture HTML prepared. Your published lecture has not been overwritten.')}catch(e){fail(e)}}
@@ -395,7 +418,7 @@ $('clear-workspace').onclick=()=>{if(!confirm('Clear every imported version and 
 bindList('source-list','source');bindList('target-list','target');
 function discardPending(){if(!formDirty)return true;if(!confirm('You have unapplied text changes. Discard them and continue? Choose Cancel to return and apply your edits.'))return false;formDirty=false;return true}
 $('editor-panel').addEventListener('input',e=>{if(e.target.id!=='line-picker'){formDirty=true;$('save-state').textContent='Unapplied text changes'}});
-document.addEventListener('click',e=>{if(!formDirty)return;const target=e.target;if(target.closest('#editor-panel')&&!target.closest('#open-text-panel'))return;if(target.closest('#save-button,#export-button,#preview-button,#export-backup')){e.preventDefault();e.stopImmediatePropagation();notify('Apply your text changes before saving or testing the lecture.');return}if(target.closest('button,[data-key]')&&!discardPending()){e.preventDefault();e.stopImmediatePropagation()}},true);
+document.addEventListener('click',e=>{if(!formDirty)return;const target=e.target;if(target.closest('#editor-panel')&&!target.closest('#open-text-panel'))return;if(target.closest('#save-button,#export-button,#preview-button,#export-backup,#handoff-button')){e.preventDefault();e.stopImmediatePropagation();notify('Apply your text changes before saving or testing the lecture.');return}if(target.closest('button,[data-key]')&&!discardPending()){e.preventDefault();e.stopImmediatePropagation()}},true);
 let dragDepth=0;document.addEventListener('dragenter',e=>{if(e.dataTransfer?.types.includes('Files')){e.preventDefault();dragDepth++;$('drop-overlay').hidden=false}});document.addEventListener('dragleave',e=>{if(e.dataTransfer?.types.includes('Files')){dragDepth--;if(dragDepth<=0)$('drop-overlay').hidden=true}});document.addEventListener('dragover',e=>{if(e.dataTransfer?.types.includes('Files'))e.preventDefault()});document.addEventListener('drop',e=>{if(!e.dataTransfer?.files.length)return;e.preventDefault();dragDepth=0;$('drop-overlay').hidden=true;importFiles(e.dataTransfer.files)});
 document.addEventListener('keydown',e=>{if(!(e.ctrlKey||e.metaKey)||e.target.closest('input,textarea,select,[contenteditable]'))return;if(e.key.toLowerCase()==='s'){e.preventDefault();saveWorkspace()}else if(e.key.toLowerCase()==='z'){e.preventDefault();e.shiftKey?redo():undo()}else if(e.key.toLowerCase()==='y'){e.preventDefault();redo()}});
 window.addEventListener('beforeunload',e=>{if((formDirty||revision!==savedRevision)&&state.projects.length){e.preventDefault();e.returnValue=''}});
@@ -406,3 +429,4 @@ render();loadLocal();
 })();
 </script>
 </body></html>
+
